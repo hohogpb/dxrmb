@@ -1,9 +1,11 @@
-const fraction = ["角", "分"];
+import Decimal from "decimal.js";
 
-const digit = ["零", "壹", "贰", "叁", "肆", "伍", "陆", "柒", "捌", "玖"];
+const zhFractions = ["角", "分"];
+
+const zhDigits = ["零", "壹", "贰", "叁", "肆", "伍", "陆", "柒", "捌", "玖"];
 
 // 大单位
-const unit = [
+const zhUnits = [
   "", // 10^0
   "万", // 10^4
   "亿", // 10^8
@@ -25,13 +27,11 @@ const unit = [
   "大数", // 巨大数目
 ];
 
+// 最大到那由他
+const limitNum = new Decimal(10).toPower(64);
+
 // 局部单位
 const unitl = ["", "拾", "佰", "仟"];
-
-interface DivResult {
-  quotient: number;
-  remainder: number;
-}
 
 interface LocalResult {
   num: number;
@@ -44,7 +44,7 @@ interface Thunk {
   unit: string;
   unitId: number;
   localStack: LocalResult[];
-  localValue: number;
+  value: number;
   unSpell?: boolean;
 }
 
@@ -55,22 +55,22 @@ interface DecimalThunk {
   unitId: number;
 }
 
-// 整数获取各个单位上的值形成一个堆
-function getDiv10Stack(int: number) {
-  const stacks: DivResult[] = [];
+function extractDigits(int: Decimal) {
+  const digits: number[] = [];
   const base = 10;
 
   let number = int;
   while (true) {
-    const quotient = Math.floor(number / base);
-    const remainder = number % base;
+    // 余数
+    const remainder = number.mod(base);
+    digits.push(remainder.toNumber());
 
-    stacks.push({ quotient, remainder });
-
-    if (quotient == 0) break;
+    // 商
+    const quotient = number.divToInt(base);
+    if (quotient.isZero()) break;
     number = quotient;
   }
-  return stacks;
+  return digits;
 }
 
 // 数组分块
@@ -121,7 +121,7 @@ function trimZeroLocal(locals: LocalResult[]) {
 function spell(localStack: LocalResult[]) {
   let words;
   if (localStack.length === 0) {
-    words = digit[0];
+    words = zhDigits[0];
   } else {
     words = localStack
       .map((e) => {
@@ -133,31 +133,32 @@ function spell(localStack: LocalResult[]) {
   return words;
 }
 
-function parseIntegerPart(integerPart: number) {
-  // 整数部分各个单位的值堆栈
-  const divStacks = getDiv10Stack(integerPart);
-  console.log(divStacks);
+function parseIntegerPart(integerPart: Decimal) {
+  // 整数部分各个单位的值
+  // 1008610086
+  // [ 1,0,0,8,6,0,0,8,6 ]
+  const digits = extractDigits(integerPart);
 
   // 将整个数字拆分到对应的大单位上
-  const divThunks = splitArray(divStacks, 4);
-  console.log(divThunks);
+  // [ [1], [0,0,8,6], [0,0,8,6] ]
+  //    亿   千百十万   千百十个
+  const digitsThunks = splitArray(digits, 4);
 
   const thunkStack: Thunk[] = [];
 
   // 针对每个trunk进行处理
-  for (let i = 0; i < divThunks.length; i++) {
-    const thunk = divThunks[i];
+  for (let thunkIdx = 0; thunkIdx < digitsThunks.length; thunkIdx++) {
+    const digits = digitsThunks[thunkIdx];
     // 单位
-    const thunkUnit = unit[i];
-    const unitId = i;
+    const thunkUnit = zhUnits[thunkIdx];
+    const unitId = thunkIdx;
 
     // 局部处理
     let localResult: LocalResult[] = [];
-    for (let j = 0; j < thunk.length; j++) {
-      const aThunk = thunk[j];
-      const num = aThunk.remainder;
-      const numHan = digit[num];
-      const localUnit = unitl[j];
+    for (let digitIdx = 0; digitIdx < digits.length; digitIdx++) {
+      const num = digits[digitIdx];
+      const numHan = zhDigits[num];
+      const localUnit = unitl[digitIdx];
 
       localResult.push({ num, numHan, unit: localUnit });
     }
@@ -166,9 +167,9 @@ function parseIntegerPart(integerPart: number) {
     const localStack = trimZeroLocal(localResult);
 
     // 局部的值
-    let localValue = 0;
+    let thunkValue = 0;
     for (let q = 0; q < localResult.length; q++) {
-      localValue += localResult[q].num * Math.pow(10, q);
+      thunkValue += localResult[q].num * Math.pow(10, q);
     }
 
     thunkStack.push({
@@ -176,17 +177,17 @@ function parseIntegerPart(integerPart: number) {
       unit: thunkUnit,
       unitId,
       localStack,
-      localValue,
+      value: thunkValue,
     });
   }
 
-  // read
+  // 读数
   const spelledThunk: Thunk[] = [];
   const allWords: string[] = [];
 
   for (let i = thunkStack.length - 1; i >= 0; i--) {
     const aThunk = thunkStack[i];
-    if (aThunk.localValue === 0) continue;
+    if (aThunk.value === 0) continue;
 
     const words = spell(aThunk.localStack);
 
@@ -212,7 +213,7 @@ function parseIntegerPart(integerPart: number) {
   return {
     allWords,
     thunkStack,
-    isZero: integerPart === 0,
+    isZero: integerPart.isZero(),
   };
 }
 
@@ -224,21 +225,23 @@ function spellFraction(result: any[]) {
   return words;
 }
 
-function parseDecimalPart(decimalPart: number) {
+function parseDecimalPart(decimalPart: Decimal) {
   const thunks: DecimalThunk[] = [];
 
   let isZero = true;
 
   let number = decimalPart;
-  for (let i = 0; i < fraction.length; i++) {
-    number = number * 10;
-    const remainder = Math.floor(number % 10);
-    const num = remainder;
+  for (let i = 0; i < zhFractions.length; i++) {
+    const x = `${number}`;
+    number = number.mul(10);
+
+    const remainder = number.mod(10).floor();
+    const num = remainder.toNumber();
 
     thunks.push({
       num,
-      numHan: digit[num],
-      unit: fraction[i],
+      numHan: zhDigits[num],
+      unit: zhFractions[i],
       unitId: i,
     });
 
@@ -252,40 +255,27 @@ function parseDecimalPart(decimalPart: number) {
 }
 
 // group span
-function rmb(value: any) {
+function rmb(value: string) {
+  let sign = Decimal.sign(value);
+
   // 负数后面在考虑
-  let number = Math.abs(value);
+  let number = Decimal.abs(value);
+
+  if (number.cmp(limitNum) >= 0) {
+    throw new Error("超过最大支持10的64次方");
+  }
 
   // 获取整数部分
-  const integerPart = Math.floor(number);
-  const decimalPart = number - integerPart;
+  const integerPart = Decimal.floor(number);
+  const decimalPart = Decimal.sub(number, integerPart);
 
   // 解析
   const integer = parseIntegerPart(integerPart);
   const decimal = parseDecimalPart(decimalPart);
 
-  const yjfArr = [
-    {
-      unit: "元",
-      value: integerPart,
-      words: integer.allWords.join(""),
-      unitId: 1,
-    },
-    {
-      unit: "角",
-      value: decimal.thunks[0].num,
-      words: decimal.thunks[0].numHan,
-    },
-    {
-      unit: "分",
-      value: decimal.thunks[1].num,
-      words: decimal.thunks[1].numHan,
-    },
-  ];
-
   const words: string[] = [];
   // 读元
-  if (integerPart !== 0) {
+  if (!integerPart.isZero()) {
     words.push(integer.allWords.join(""), "元");
   }
 
@@ -300,21 +290,18 @@ function rmb(value: any) {
     words.push(decimal.thunks[1].numHan, "分");
   }
 
+  if (words.length === 0) {
+    return "零元整";
+  }
+
   // 如果有元而且没分就以整结尾
-  if (integerPart !== 0 && decimal.thunks[1].num === 0) {
+  if (!integerPart.isZero() && decimal.thunks[1].num === 0) {
     words.push("整");
   }
 
-  if (words.length === 0) {
-    console.log("零元整");
-  } else {
-    console.log(words.join(""));
+  if (sign < 0) {
+    words.unshift("负");
   }
+
+  return words.join("");
 }
-
-// yi wan yuan jiao fen
-
-// 将所有连续的0换成一个0，如果是整体开头的或末尾的0就删除
-
-// 包含了 角分
-rmb(50000);
