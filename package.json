@@ -1,6 +1,7 @@
 {
   "name": "dxrmb",
   "version": "0.0.3",
+  "description": "大写人民币金额",
   "author": "bh",
   "license": "MIT",
   "main": "dist/index.js",
